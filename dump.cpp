@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
+#include <stdlib.h>
 
 // Global States
 bool g_Verbose = false; 
@@ -15,13 +16,17 @@ typedef int (__cdecl *PSO2H_RegisterRecvAll)(void* callbackFunc, const char* plu
 // ---------------------------------------------------------
 // Callback
 // ---------------------------------------------------------
-// Note: OnPacketReceived is hooked from PSO2H. It expects the following arguments IN ORDER. Obviously.
-void __cdecl OnPacketReceived(void* context, uint8_t* packetData, uint32_t flags, uint32_t payloadSize) {
-    uint32_t totalSize = *(uint32_t*)(packetData);
-    uint16_t packetId  = *(uint16_t*)(packetData + 4);
+// Note: OnPacketReceived is hooked from PSO2H.
+void __cdecl OnPacketReceived(uint8_t** packetData)
+{
+    uint8_t* rawData = *packetData;
+    uint32_t totalSize = *(uint32_t*)(rawData);
 
-    // Drop anything 0bytes or >10000bytes, it's probably garbage or null
-    if (totalSize == 0 || totalSize > 10000 || !g_LogFile) return; 
+    // Too big, bail.
+    if (totalSize < 8 || totalSize > 8192 || !g_LogFile) return;
+
+    // Swap endian-ness
+    uint16_t packetId = _byteswap_ushort(*(uint16_t*)(rawData + 4));
 
     // Get the current time
     SYSTEMTIME st;
@@ -36,20 +41,24 @@ void __cdecl OnPacketReceived(void* context, uint8_t* packetData, uint32_t flags
             packetId, totalSize);
 
     // Print payload if Verbose=Y
-    if (g_Verbose) {
-        for (uint32_t i = 0; i < totalSize; i++) {
-            fprintf(g_LogFile, "%02X ", packetData[i]);
-            if ((i + 1) % 16 == 0) {
-                fprintf(g_LogFile, "\n\n");
+    if (g_Verbose)
+    {
+        size_t stringBufferSize = (totalSize * 4) + 128;
+        char* hexString = (char*)malloc(stringBufferSize);
+        
+        if (hexString) {
+            char* ptr = hexString;
+            for (uint32_t i = 0; i < totalSize; i++) {
+                ptr += sprintf(ptr, "%02X ", rawData[i]);
+                if ((i + 1) % 16 == 0) ptr += sprintf(ptr, "\n\n");
             }
+            if (totalSize % 16 != 0) ptr += sprintf(ptr, "\n");
+            
+            *ptr = '\0'; 
+            fputs(hexString, g_LogFile);
+            free(hexString);
         }
-        if (totalSize % 16 != 0) {
-            fprintf(g_LogFile, "\n");
-        }
-    }
-    
-    // fprintf(g_LogFile, "\n");
-    
+    }    
     // Flush the buffer straight to disk
     fflush(g_LogFile);
 
